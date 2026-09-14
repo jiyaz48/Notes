@@ -1,0 +1,158 @@
+Jenkins with Nexus,Sonarqube and Tomcat:::
+
+
+Create 4 EC2 instances namely jenkins,nexus,sonarqube,tomcat with c7i-flex.large and 20 GB for each.
+Connect to all instances and change the hostname to avoid confusion.[hostnamectl set-hostname name].
+
+Jenkins Setup:
+Take a instance and install jenkins and also GIT.
+Jenkins commands
+        yum install java-21-amazon-corretto -y
+        sudo wget -O /etc/yum.repos.d/jenkins.repo     https://pkg.jenkins.io/rpm-stable/jenkins.repo
+        yum install jenkins -y
+        systemctl start jenkins
+        systemctl status jenkins
+        systemctl enable jenkins 
+Access the jenkins dashboard with instance public ip address and port 8080
+Manage jenkins ->Tools-> maven installations->Add maven -> mymaven ->save
+
+Plugins to install::
+Deploy to container
+Nexus artifact uploader
+sonarqube scanner
+pipeline stage view
+pipeline utility steps
+
+Sonarqube Setup:
+Take another instance and install java 17 and also sonarqube.
+Sonarqube commands:
+              #! /bin/bash
+              #Launch an instance with 9000 and t2.medium
+              cd /opt/
+              wget https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-8.9.6.50800.zip
+              unzip sonarqube-8.9.6.50800.zip
+              yum install java-17-amazon-corretto -y
+              useradd sonar
+              chown sonar:sonar sonarqube-8.9.6.50800 -R
+              chmod 777 sonarqube-8.9.6.50800 -R
+              su - sonar
+              
+              #run this on server manually
+              #sh /opt/sonarqube-8.9.6.50800/bin/linux/sonar.sh start
+              #echo "user=admin & password=admin"
+
+Access sonarqube dashboard with public ip and 9000 port.
+Manage jenkins-> system-> sonarqube servers->mysonar->URL->credentials[Add ->global->secret text->ID(sonar)
+To get the secret ---> sonarqube dashboard->create project-> MyProject->MyToken->Generate
+Create a pipeline job in jenkins and configure the job-->pipeline syntax->with sonarqube env->select credentials->generate
+In sonarqube dashboard--> after generating token -->click continue->maven -->copy commands and use it in job config.
+Also add a stage QualityGate -->pipeline syntax->wait for quality gate->generate and add in job
+In SQ dashboard, project->project settings->webhooks->give any name-> URL[jenkins url/sonarqube-webhook/]
+
+Nexus setup:
+Take an instance and install java and nexus 
+nexus commands:
+(copy paste these commands one by one)
+          yum install java-21-amazon-corretto -y
+          
+          cd /opt
+          wget https://download.sonatype.com/nexus/3/nexus-3.96.0-09-linux-x86_64.tar.gz
+          tar -zxvf nexus-3.96.0-09-linux-x86_64.tar.gz
+          useradd nexus
+          chown -R nexus:nexus nexus-3.96.0-09 sonatype-work
+          su - nexus
+          cd /opt/nexus-3.96.0-09/bin/
+          ./nexus start
+access nexus with public ip and port 8081.
+In nexus dashboard -->settings--> repository-->create repository-->maven2(hosted) -->myrepo -->allow redeploy
+Go to jenkins dashboard--> job-->configure-->pipeline syntax -->nexus artifact uploader-->nexus3-->http-->nexus url-->credentials[Add ->GroupID,Version[from pom.xml]-->repository[myrepo]-->Artifact[myweb]-->war-->target/myweb.war
+From pipeline syntax -->pipeline utility steps-->take the script to get the automatic version update
+Approve the permissions in manage jenkins to get the required values.
+Webhook integration with GIT:::
+Git-->repo-->repo settings-->webhooks-->add a new webhook-->jenkinsurl/github-webhook/ --> choose json-->activate
+In job -->configure -->triggers-->Github hook trigger for GITscm polling.
+Now Github -->pom.xml-->change version and commit --> pipeline will trigger the build automatically and version will be stored in nexus.
+
+Tomcat Setup:
+Take another instance and install java and also tomcat.
+Tomcat commands:
+            yum install java-21-amazon-corretto -y
+            wget https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.121/bin/apache-tomcat-9.0.121.tar.gz
+            tar -zxvf apache-tomcat-9.0.121.tar.gz
+            sed -i '56 a\<role rolename="manager-gui"/>' apache-tomcat-9.0.121/conf/tomcat-users.xml
+            sed -i '57 a\<role rolename="manager-script"/>' apache-tomcat-9.0.121/conf/tomcat-users.xml
+            sed -i '58 a\<user username="tomcat" password="admin@123" roles="manager-gui, manager-script"/>' apache-tomcat-9.0.121/conf/tomcat-users.xml
+            sed -i '59 a\</tomcat-users>' apache-tomcat-9.0.121/conf/tomcat-users.xml
+            sed -i '56d' apache-tomcat-9.0.121/conf/tomcat-users.xml
+            sed -i '21d' apache-tomcat-9.0.121/webapps/manager/META-INF/context.xml
+            sed -i '22d' apache-tomcat-9.0.121/webapps/manager/META-INF/context.xml
+            sh apache-tomcat-9.0.121/bin/startup.sh
+Access tomcat through public ip with port 8080.
+manage app-->username and password.
+Jenkins dashboard-->job-->configure-->pipeline syntax -->deploy war/ear to a container-->target/*.war -->e-com--> credentials [add ->username and password]-->Tomcat URL
+Next at last configure the post build actions for success/failure/abort
+This is a Complete CI/CD pipeline with integrating nexus,sonarqube and tomcat.
+
+
+Pipeline::
+
+pipeline {
+    agent {
+        node{
+            label "dev"
+        }
+    }
+    tools{
+        maven "mymaven"
+    }
+    stages {
+        stage('code') {
+            steps {
+                git "https://github.com/jiyaz48/one.git"
+            }
+        }
+        stage("build"){
+            steps{
+                sh "mvn clean install"
+            }
+        }
+        stage("CQA"){
+            steps{
+                withSonarQubeEnv('mysonar') {
+                sh '''
+                    mvn clean verify \
+                    org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+                    -Dsonar.projectKey=myproject \
+                    -Dsonar.host.url=http://18.207.168.93:9000 \
+                    -Dsonar.login=a2152d68d340afbc8d89d0b7e543a5c520f276d6
+                '''
+                }
+            }
+        }
+        stage("QualityGate"){
+            steps{
+                waitForQualityGate abortPipeline: true, credentialsId: 'sonar'
+            }
+        }
+        stage("Artifact"){
+            steps{
+                script {
+                    def pom = readMavenPom file: 'pom.xml'
+                    nexusArtifactUploader(artifacts: [[artifactId: pom.artifactId, classifier: '', file: "target/myweb.war", type: 'war']], credentialsId: 'nexus', groupId: pom.groupId, nexusUrl: '54.224.109.188:8081', nexusVersion: 'nexus3', protocol: 'http', repository: 'myrepo', version: pom.version)
+                }
+            }
+        }
+        stage("Deploy"){
+            steps{
+                deploy adapters: [tomcat9(alternativeDeploymentContext: '', credentialsId: 'cred', path: '', url: 'http://54.205.16.148:8080/')], contextPath: 'myapp', war: 'target/*.war'
+            }
+        }
+    }
+    post {
+        always{
+            mail to: 'jismloves@gmail.com',
+            subject: "Build Status: ${currentBuild.fullDisplayName}",
+            body: "The build ${env.BUILD_NUMBER} finished with status: ${currentBuild.currentResult}. View logs at: ${env.BUILD_URL}"
+           }
+      }
+}
