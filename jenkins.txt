@@ -91,6 +91,9 @@ Access tomcat through public ip with port 8080.
 manage app-->username and password.
 Jenkins dashboard-->job-->configure-->pipeline syntax -->deploy war/ear to a container-->target/*.war -->e-com--> credentials [add ->username and password]-->Tomcat URL
 Next at last configure the post build actions for success/failure/abort
+Integration with gmail:
+Manage jenkins -->system -->email notification -->SMTP server --> smtp.gmail.com-->advanced-->smtp authentication-->give ur email id-->password generated from mail[ gmail -->my account-->app passwords(2-step verification needed)-->create a password] -->use SSL -->port 465 -->Recipient mailid.
+
 This is a Complete CI/CD pipeline with integrating nexus,sonarqube and tomcat.
 
 
